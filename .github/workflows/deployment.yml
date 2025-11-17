@@ -1,0 +1,245 @@
+name: Deploy Next Hire APP
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [published]
+
+env:
+  AWS_REGION: us-east-2
+  ECR_REPOSITORY: bleks-app
+  ECS_CLUSTER: bleks-cluster
+  ECS_SERVICE: bleks-app
+  AWS_ACCOUNT_ID: 504151741392
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Django tests
+      run: |
+        python manage.py test --noinput
+
+    - name: Security scan
+      run: |
+        pip install bandit safety
+        bandit -r . -f json -o bandit-report.json || true
+        safety check --json --output safety-report.json || true
+
+  build-and-scan:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Build
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        build-args: |
+          BUILD_VERSION=${{ github.sha }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          COMMIT_SHA=${{ github.sha }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        push: true
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.meta.outputs.tags }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+  
+  deploy-to-dev:
+    needs: build-and-scan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-dev
+
+    - name: Deploy to ECS dev
+      run: |
+        aws ecs update-service \
+          --cluster $ECS_CLUSTER \
+          --service $ECS_SERVICE \
+          --force-new-deployment
+
+  # deploy-to-staging:
+  #   needs: build-and-scan
+  #   if: github.ref == 'refs/heads/main'
+  #   runs-on: ubuntu-latest
+  #   environment: staging
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+
+  #   steps:
+  #   - name: Checkout
+  #     uses: actions/checkout@v4
+
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+  #       aws-region: ${{ env.AWS_REGION }}
+  #       role-session-name: GitHubActions-Staging
+
+  #   - name: Deploy to ECS Staging
+  #     run: |
+  #       aws ecs update-service \
+  #         --cluster $ECS_CLUSTER-staging \
+  #         --service $ECS_SERVICE-staging \
+  #         --force-new-deployment
+
+    - name: Wait for deployment
+      run: |
+        echo "⏳ Waiting for ECS service to stabilize..."
+        aws ecs wait services-stable \
+          --cluster $ECS_CLUSTER \
+          --services $ECS_SERVICE
+
+    - name: Run staging tests
+      run: |
+        chmod +x scripts/test-staging.sh
+        ./scripts/test-staging.sh
+
+  # deploy-to-production:
+  #   needs: [build-and-scan, deploy-to-staging]
+  #   if: github.ref == 'refs/heads/main'
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+
+  #   steps:
+  #   - name: Checkout
+  #     uses: actions/checkout@v4
+
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+  #       aws-region: ${{ env.AWS_REGION }}
+  #       role-session-name: GitHubActions-Production
+
+  #   - name: Deploy to ECS Production
+  #     run: |
+  #       aws ecs update-service \
+  #         --cluster $ECS_CLUSTER \
+  #         --service $ECS_SERVICE \
+  #         --force-new-deployment
+
+  #   - name: Wait for deployment
+  #     run: |
+  #       echo "⏳ Waiting for ECS service to stabilize..."
+  #       aws ecs wait services-stable \
+  #         --cluster $ECS_CLUSTER \
+  #         --services $ECS_SERVICE
+
+  #   - name: Run production tests
+  #     run: |
+  #       chmod +x scripts/test-production.sh
+  #       ./scripts/test-production.sh
+
+  #   - name: Notify deployment
+  #     run: |
+  #       ALB_DNS=$(aws elbv2 describe-load-balancers --names bleks-alb --query 'LoadBalancers[0].DNSName' --output text)
+  #       echo "🚀 Production Deployment Successful!"
+  #       echo "Application URL: https://$ALB_DNS"
+  #       echo "Image Version: ${{ github.sha }}"
+  #       echo "Build: ${{ github.run_number }}"
+
+  # infrastructure-test:
+  #   needs: deploy-to-production
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+
+  #   steps:
+  #   - name: Checkout
+  #     uses: actions/checkout@v4
+
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       role-to-assume: ${{ vars.AWS_OIDC_ROLE }}
+  #       aws-region: ${{ env.AWS_REGION }}
+  #       role-session-name: GitHubActions-Test
+
+  #   - name: Run comprehensive infrastructure tests
+  #     run: |
+  #       chmod +x scripts/test-infrastructure.sh
+  #       ./scripts/test-infrastructure.sh
+
+  #   - name: Performance test
+  #     run: |
+  #       chmod +x scripts/performance-test.sh
+  #       ./scripts/performance-test.sh
