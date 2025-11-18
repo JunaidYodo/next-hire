@@ -97,8 +97,8 @@ jobs:
       run: |
         # Extract the actual SHA tag from metadata output
         TAGS="${{ steps.meta.outputs.tags }}"
-        # Get the second tag (SHA tag) from the comma-separated list
-        SHA_TAG=$(echo "$TAGS" | cut -d',' -f2)
+        # Get the second tag (SHA tag) and remove newlines
+        SHA_TAG=$(echo "$TAGS" | tr ',' '\n' | sed -n '2p' | tr -d '[:space:]')
         echo "tag=$SHA_TAG" >> $GITHUB_OUTPUT
         echo "Using image tag for scanning: $SHA_TAG"
 
