@@ -95,8 +95,8 @@ jobs:
     - name: Get single image tag for scanning
       id: image-tag
       run: |
-        # Use the full image reference with SHA tag
-        IMAGE_TAG="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+        # Use the actual SHA tag format that was pushed
+        IMAGE_TAG="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:sha-${{ github.sha }}"
         echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
         echo "Using image tag for scanning: $IMAGE_TAG"
 
