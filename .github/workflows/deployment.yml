@@ -126,8 +126,8 @@ jobs:
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
-        aws-region: ${{ env.AWS_REGION }}
-        role-session-name: GitHubActions-dev
+        aws-region: "us-east-2"
+        role-session-name: GitHubActions-DEV
 
     - name: Deploy to ECS dev
       run: |
