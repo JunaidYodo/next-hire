@@ -12,9 +12,6 @@ echo "Testing Staging Environment: http://$ALB_DNS"
 echo "1. Testing health endpoint..."
 curl -s http://$ALB_DNS/health/ | jq '.'
 
-echo "2. Testing infrastructure endpoints..."
-curl -s http://$ALB_DNS/infra-test/ | jq '.'
-
 echo "3. Checking ECS service status..."
 aws ecs describe-services --cluster bleks-cluster --services bleks-app --query 'services[0]'
 
