@@ -34,7 +34,6 @@ jobs:
 
     - name: Run Django tests
       run: |
-        cd ai_next_hire
         python manage.py test --noinput
 
     - name: Security scan
