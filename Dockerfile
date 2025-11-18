@@ -1,4 +1,3 @@
-
 FROM python:3.11-slim AS builder
 
 # Build arguments for versioning
@@ -15,13 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 COPY requirements.txt .
 
 ###################################
-# Install to /install directory   #
+# Install to virtual environment   #
 ###################################
 RUN pip install --upgrade pip && \
-    pip install --prefix=/install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
 
 
 ######################################
@@ -47,9 +50,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 ##################################
-# Copy installed packages        #
+# Copy virtual environment       #
 ##################################
-COPY --from=builder /install /usr/local
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
 COPY . .
