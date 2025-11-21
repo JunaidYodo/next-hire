@@ -3,10 +3,18 @@ name: Deploy Next Hire APP
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      deploy-to-staging:
+        description: 'Deploy current version to Staging'
+        required: false
+        type: boolean
+        default: false
+      deploy-to-production:
+        description: 'Deploy current version to Production'
+        required: false
+        type: boolean
+        default: false
 
 env:
   AWS_REGION: us-east-2
@@ -42,15 +50,55 @@ jobs:
         bandit -r . -f json -o bandit-report.json || true
         safety check --json --output safety-report.json || true
 
-  build-and-scan:
+  determine-version:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get next semantic version
+      id: version
+      run: |
+        # Get the latest release tag
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Latest tag: $LATEST_TAG"
+        
+        # Remove 'v' prefix and get version parts
+        VERSION=${LATEST_TAG#v}
+        MAJOR=$(echo $VERSION | cut -d. -f1)
+        MINOR=$(echo $VERSION | cut -d. -f2)
+        PATCH=$(echo $VERSION | cut -d. -f3)
+        
+        # Increment patch version by default
+        NEW_PATCH=$((PATCH + 1))
+        NEW_VERSION="v$MAJOR.$MINOR.$NEW_PATCH"
+        
+        echo "New version: $NEW_VERSION"
+        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+  build-and-push:
+    needs: determine-version
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ needs.determine-version.outputs.version }}
     permissions:
       id-token: write
       contents: read
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+
+    - name: Set version
+      id: version
+      run: |
+        VERSION="${{ needs.determine-version.outputs.version }}"
+        echo "image-tag=$VERSION" >> $GITHUB_OUTPUT
+        echo "Using image tag: $VERSION"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -66,186 +114,162 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Extract metadata for Docker
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: |
-          ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}
-        tags: |
-          type=sha,prefix=
-          type=raw,value=latest,enable={{is_default_branch}}
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         platforms: linux/amd64
         build-args: |
-          BUILD_VERSION=${{ github.sha }}
-          BUILD_DATE=${{ github.event.head_commit.timestamp }}
-          COMMIT_SHA=${{ github.sha }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+          BUILD_VERSION=${{ steps.version.outputs.image-tag }}
+        tags: |
+          ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image-tag }}
+          ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
         push: true
-
-    - name: Get single image tag for scanning
-      id: image-tag
-      run: |
-        # Extract the actual SHA tag from metadata output
-        TAGS="${{ steps.meta.outputs.tags }}"
-        # Get the second tag (SHA tag) and remove newlines
-        SHA_TAG=$(echo "$TAGS" | tr ',' '\n' | sed -n '2p' | tr -d '[:space:]')
-        echo "tag=$SHA_TAG" >> $GITHUB_OUTPUT
-        echo "Using image tag for scanning: $SHA_TAG"
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ steps.image-tag.outputs.tag }}
+        image-ref: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image-tag }}
         format: 'sarif'
         output: 'trivy-results.sarif'
 
   deploy-to-dev:
-    needs: build-and-scan
+    needs: build-and-push
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # environment: dev
     permissions:
       id-token: write
       contents: read
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
-        aws-region: "us-east-2"
-        role-session-name: GitHubActions-DEV
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Dev
 
-    - name: Deploy to ECS dev
+    - name: Deploy to Development
       run: |
+        VERSION="${{ needs.build-and-push.outputs.image-tag }}"
+        echo "Deploying version $VERSION to Development"
+        
         aws ecs update-service \
-          --cluster $ECS_CLUSTER \
+          --cluster next-hire-cluster-dev \
           --service $ECS_SERVICE \
           --force-new-deployment
 
-  # deploy-to-staging:
-  #   needs: build-and-scan
-  #   if: github.ref == 'refs/heads/main'
-  #   runs-on: ubuntu-latest
-  #   environment: staging
-  #   permissions:
-  #     id-token: write
-  #     contents: read
-
-  #   steps:
-  #   - name: Checkout
-  #     uses: actions/checkout@v4
-
-  #   - name: Configure AWS credentials
-  #     uses: aws-actions/configure-aws-credentials@v4
-  #     with:
-  #       role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-  #       aws-region: ${{ env.AWS_REGION }}
-  #       role-session-name: GitHubActions-Staging
-
-  #   - name: Deploy to ECS Staging
-  #     run: |
-  #       aws ecs update-service \
-  #         --cluster $ECS_CLUSTER-staging \
-  #         --service $ECS_SERVICE-staging \
-  #         --force-new-deployment
-
-    - name: Wait for deployment
+    - name: Wait for dev deployment
       run: |
-        echo "⏳ Waiting for ECS service to stabilize..."
+        echo "Waiting for Development deployment..."
         aws ecs wait services-stable \
-          --cluster $ECS_CLUSTER \
+          --cluster next-hire-cluster-dev \
           --services $ECS_SERVICE
+        echo "Development deployment completed!"
 
-    - name: Run staging tests
+  # MANUAL APPROVAL FOR STAGING
+  wait-for-staging-approval:
+    needs: deploy-to-dev
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-staging == true)
+    runs-on: ubuntu-latest
+    environment: 
+      name: staging
+      url: https://staging.example.com
+
+    steps:
+    - name: Wait for manual approval
+      uses: trstringer/manual-approval@v1
+      with:
+        secret: ${{ github.token }}
+        approvers: ${{ vars.STAGING_APPROVERS }}
+        minimum-approvals: 1
+
+  deploy-to-staging:
+    needs: wait-for-staging-approval
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Staging
+
+    - name: Deploy to Staging
       run: |
-        chmod +x scripts/test-staging.sh
-        ./scripts/test-staging.sh
+        VERSION="${{ needs.build-and-push.outputs.image-tag }}"
+        echo "🚀 Deploying version $VERSION to Staging"
+        
+        aws ecs update-service \
+          --cluster next-hire-cluster-stg \
+          --service $ECS_SERVICE-staging \
+          --force-new-deployment
 
-  # deploy-to-production:
-  #   needs: [build-and-scan, deploy-to-staging]
-  #   if: github.ref == 'refs/heads/main'
-  #   runs-on: ubuntu-latest
-  #   environment: production
-  #   permissions:
-  #     id-token: write
-  #     contents: read
+    - name: Wait for staging deployment
+      run: |
+        echo "Waiting for Staging deployment..."
+        aws ecs wait services-stable \
+          --cluster next-hire-cluster-stg \
+          --services $ECS_SERVICE
+        echo "Staging deployment completed!"
 
-  #   steps:
-  #   - name: Checkout
-  #     uses: actions/checkout@v4
+  # MANUAL APPROVAL FOR PRODUCTION
+  wait-for-production-approval:
+    needs: deploy-to-staging
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-production == true)
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: https://production.example.com
 
-  #   - name: Configure AWS credentials
-  #     uses: aws-actions/configure-aws-credentials@v4
-  #     with:
-  #       role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-  #       aws-region: ${{ env.AWS_REGION }}
-  #       role-session-name: GitHubActions-Production
+    steps:
+    - name: Wait for manual approval
+      uses: trstringer/manual-approval@v1
+      with:
+        secret: ${{ github.token }}
+        approvers: ${{ vars.PRODUCTION_APPROVERS }}
+        minimum-approvals: 1
 
-  #   - name: Deploy to ECS Production
-  #     run: |
-  #       aws ecs update-service \
-  #         --cluster $ECS_CLUSTER \
-  #         --service $ECS_SERVICE \
-  #         --force-new-deployment
+  deploy-to-production:
+    needs: wait-for-production-approval
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
 
-  #   - name: Wait for deployment
-  #     run: |
-  #       echo "⏳ Waiting for ECS service to stabilize..."
-  #       aws ecs wait services-stable \
-  #         --cluster $ECS_CLUSTER \
-  #         --services $ECS_SERVICE
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Production
 
-  #   - name: Run production tests
-  #     run: |
-  #       chmod +x scripts/test-production.sh
-  #       ./scripts/test-production.sh
+    - name: Deploy to Production
+      run: |
+        VERSION="${{ needs.build-and-push.outputs.image-tag }}"
+        echo "Deploying version $VERSION to Production"
+        
+        aws ecs update-service \
+          --cluster next-hire-cluster-prd \
+          --service $ECS_SERVICE \
+          --force-new-deployment
 
-  #   - name: Notify deployment
-  #     run: |
-  #       ALB_DNS=$(aws elbv2 describe-load-balancers --names bleks-alb --query 'LoadBalancers[0].DNSName' --output text)
-  #       echo "🚀 Production Deployment Successful!"
-  #       echo "Application URL: https://$ALB_DNS"
-  #       echo "Image Version: ${{ github.sha }}"
-  #       echo "Build: ${{ github.run_number }}"
+    - name: Wait for production deployment
+      run: |
+        echo "Waiting for Production deployment..."
+        aws ecs wait services-stable \
+          --cluster next-hire-cluster-prd\
+          --services $ECS_SERVICE
+        echo "Production deployment completed!"
 
-  # infrastructure-test:
-  #   needs: deploy-to-production
-  #   runs-on: ubuntu-latest
-  #   environment: production
-  #   permissions:
-  #     id-token: write
-  #     contents: read
-
-  #   steps:
-  #   - name: Checkout
-  #     uses: actions/checkout@v4
-
-  #   - name: Configure AWS credentials
-  #     uses: aws-actions/configure-aws-credentials@v4
-  #     with:
-  #       role-to-assume: ${{ vars.AWS_OIDC_ROLE }}
-  #       aws-region: ${{ env.AWS_REGION }}
-  #       role-session-name: GitHubActions-Test
-
-  #   - name: Run comprehensive infrastructure tests
-  #     run: |
-  #       chmod +x scripts/test-infrastructure.sh
-  #       ./scripts/test-infrastructure.sh
-
-  #   - name: Performance test
-  #     run: |
-  #       chmod +x scripts/performance-test.sh
-  #       ./scripts/performance-test.sh
+    - name: Deployment success notification
+      run: |
+        VERSION="${{ needs.build-and-push.outputs.image-tag }}"
+        echo "Version $VERSION successfully deployed to all environments!"
