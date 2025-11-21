@@ -10,10 +10,10 @@ on:
 
 env:
   AWS_REGION: us-east-2
-  ECR_REPOSITORY: bleks-app
-  ECS_CLUSTER: bleks-cluster
-  ECS_SERVICE: bleks-app
-  AWS_ACCOUNT_ID: 504151741392
+  ECR_REPOSITORY: next-hire-app
+  ECS_CLUSTER: next-hire-cluster
+  ECS_SERVICE: next-hire-app
+  AWS_ACCOUNT_ID: 618166615317
 
 jobs:
   test:

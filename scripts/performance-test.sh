@@ -4,7 +4,7 @@ set -e
 echo "⚡ PERFORMANCE TESTS"
 echo "==================="
 
-ALB_DNS=$(aws elbv2 describe-load-balancers --names bleks-alb --query 'LoadBalancers[0].DNSName' --output text)
+ALB_DNS=$(aws elbv2 describe-load-balancers --names next-hire-alb --query 'LoadBalancers[0].DNSName' --output text)
 
 # Load test the health endpoint
 echo "Running performance test on: http://$ALB_DNS/health/"
