@@ -167,10 +167,10 @@ jobs:
           --services $ECS_SERVICE
         echo "Development deployment completed!"
 
-  # MANUAL APPROVAL FOR STAGING
+  # STAGING DEPLOYMENT - Can be re-run directly from the re-run icon
   wait-for-staging-approval:
-    needs: deploy-to-dev
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-staging == true)
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-staging == true) || github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     environment: 
       name: staging
@@ -186,6 +186,7 @@ jobs:
 
   deploy-to-staging:
     needs: wait-for-staging-approval
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-staging == true) || github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -203,7 +204,8 @@ jobs:
     - name: Deploy to Staging
       run: |
         VERSION="${{ needs.build-and-push.outputs.image-tag }}"
-        echo "🚀 Deploying version $VERSION to Staging"
+        echo "Deploying version $VERSION to Staging"
+        echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
         
         aws ecs update-service \
           --cluster next-hire-cluster-stg \
@@ -215,13 +217,13 @@ jobs:
         echo "Waiting for Staging deployment..."
         aws ecs wait services-stable \
           --cluster next-hire-cluster-stg \
-          --services $ECS_SERVICE
+          --services $ECS_SERVICE-staging
         echo "Staging deployment completed!"
 
-  # MANUAL APPROVAL FOR PRODUCTION
+  # PRODUCTION DEPLOYMENT - Can be re-run directly from the re-run icon
   wait-for-production-approval:
-    needs: deploy-to-staging
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-production == true)
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-production == true) || github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     environment: 
       name: production
@@ -237,6 +239,7 @@ jobs:
 
   deploy-to-production:
     needs: wait-for-production-approval
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-to-production == true) || github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -255,6 +258,7 @@ jobs:
       run: |
         VERSION="${{ needs.build-and-push.outputs.image-tag }}"
         echo "Deploying version $VERSION to Production"
+        echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
         
         aws ecs update-service \
           --cluster next-hire-cluster-prd \
@@ -265,11 +269,11 @@ jobs:
       run: |
         echo "Waiting for Production deployment..."
         aws ecs wait services-stable \
-          --cluster next-hire-cluster-prd\
+          --cluster next-hire-cluster-prd \
           --services $ECS_SERVICE
         echo "Production deployment completed!"
 
     - name: Deployment success notification
       run: |
         VERSION="${{ needs.build-and-push.outputs.image-tag }}"
-        echo "Version $VERSION successfully deployed to all environments!"
+        echo "Version $VERSION successfully deployed to Production!"
