@@ -189,7 +189,6 @@ jobs:
     needs: wait-for-staging-approval
     if: always()
     runs-on: ubuntu-latest
-    environment: staging
     permissions:
       id-token: write
       contents: read
@@ -261,65 +260,65 @@ jobs:
         minimum-approvals: 1
 
   # PRODUCTION DEPLOYMENT - Always available for re-run
-  deploy-to-production:
-    needs: wait-for-production-approval
-    if: always()
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      id-token: write
-      contents: read
+  # deploy-to-production:
+  #   needs: wait-for-production-approval
+  #   if: always()
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   permissions:
+  #     id-token: write
+  #     contents: read
 
-    steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
-        aws-region: ${{ env.AWS_REGION }}
-        role-session-name: GitHubActions-Production
+  #   steps:
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
+  #       aws-region: ${{ env.AWS_REGION }}
+  #       role-session-name: GitHubActions-Production
 
-    - name: Get image tag for production
-      id: get-production-tag
-      run: |
-        # Use the image tag from build job, or get from ECR if re-running
-        if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
-          echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
-          echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
-        else
-          # When re-running production job independently, get latest tag from ECR
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name $ECR_REPOSITORY \
-            --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
-            --output text 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ]; then
-            echo "Using latest ECR image tag: $LATEST_TAG"
-            echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          else
-            echo "❌ No image tags found in ECR"
-            exit 1
-          fi
-        fi
+  #   - name: Get image tag for production
+  #     id: get-production-tag
+  #     run: |
+  #       # Use the image tag from build job, or get from ECR if re-running
+  #       if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
+  #         echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
+  #         echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
+  #       else
+  #         # When re-running production job independently, get latest tag from ECR
+  #         LATEST_TAG=$(aws ecr describe-images \
+  #           --repository-name $ECR_REPOSITORY \
+  #           --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
+  #           --output text 2>/dev/null || echo "")
+  #         if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ]; then
+  #           echo "Using latest ECR image tag: $LATEST_TAG"
+  #           echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+  #         else
+  #           echo "❌ No image tags found in ECR"
+  #           exit 1
+  #         fi
+  #       fi
 
-    - name: Deploy to Production
-      run: |
-        VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-        echo "🚀 Deploying version $VERSION to Production"
-        echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+  #   - name: Deploy to Production
+  #     run: |
+  #       VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
+  #       echo "🚀 Deploying version $VERSION to Production"
+  #       echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
         
-        aws ecs update-service \
-          --cluster next-hire-cluster-prd \
-          --service $ECS_SERVICE \
-          --force-new-deployment
+  #       aws ecs update-service \
+  #         --cluster next-hire-cluster-prd \
+  #         --service $ECS_SERVICE \
+  #         --force-new-deployment
 
-    - name: Wait for production deployment
-      run: |
-        echo "Waiting for Production deployment..."
-        aws ecs wait services-stable \
-          --cluster next-hire-cluster-prd \
-          --services $ECS_SERVICE
-        echo "Production deployment completed!"
+  #   - name: Wait for production deployment
+  #     run: |
+  #       echo "Waiting for Production deployment..."
+  #       aws ecs wait services-stable \
+  #         --cluster next-hire-cluster-prd \
+  #         --services $ECS_SERVICE
+  #       echo "Production deployment completed!"
 
-    - name: Deployment success notification
-      run: |
-        VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-        echo "Version $VERSION successfully deployed to Production!"
+    # - name: Deployment success notification
+    #   run: |
+    #     VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
+    #     echo "Version $VERSION successfully deployed to Production!"
