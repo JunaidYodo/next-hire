@@ -122,8 +122,6 @@ jobs:
   deploy-to-dev:
     needs: build-and-push
     runs-on: ubuntu-latest
-    environment:
-      name: dev
     permissions:
       id-token: write
       contents: read
@@ -158,9 +156,7 @@ jobs:
     needs: build-and-push
     if: false
     runs-on: ubuntu-latest
-    environment:
-      name: staging
-      url: https://staging.example.com
+    environment: staging
     permissions:
       id-token: write
       contents: read
@@ -188,7 +184,7 @@ jobs:
             echo "Using latest ECR image tag: $LATEST_TAG"
             echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           else
-            echo "❌ No image tags found in ECR"
+            echo " No image tags found in ECR"
             exit 1
           fi
         fi
@@ -206,7 +202,7 @@ jobs:
 
     - name: Wait for staging deployment
       run: |
-        echo "Waiting for Staging deployment..."
+        echo " Waiting for Staging deployment..."
         aws ecs wait services-stable \
           --cluster next-hire-cluster-stg \
           --services $ECS_SERVICE-staging
@@ -216,9 +212,7 @@ jobs:
     needs: build-and-push
     if: false
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://production.example.com
+    environment: production
     permissions:
       id-token: write
       contents: read
@@ -246,7 +240,7 @@ jobs:
             echo "Using latest ECR image tag: $LATEST_TAG"
             echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           else
-            echo "❌ No image tags found in ECR"
+            echo " No image tags found in ECR"
             exit 1
           fi
         fi
@@ -264,7 +258,7 @@ jobs:
 
     - name: Wait for production deployment
       run: |
-        echo "Waiting for Production deployment..."
+        echo " Waiting for Production deployment..."
         aws ecs wait services-stable \
           --cluster next-hire-cluster-prd \
           --services $ECS_SERVICE
