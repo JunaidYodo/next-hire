@@ -156,7 +156,6 @@ jobs:
 
   deploy-to-staging:
     needs: build-and-push
-    if: false
     runs-on: ubuntu-latest
     environment: 
       name: staging
