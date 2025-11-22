@@ -122,6 +122,8 @@ jobs:
   deploy-to-dev:
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment: 
+      name: dev
     permissions:
       id-token: write
       contents: read
@@ -156,115 +158,116 @@ jobs:
     needs: build-and-push
     if: false
     runs-on: ubuntu-latest
-    environment: staging
+    environment: 
+      name: staging
     permissions:
       id-token: write
       contents: read
 
     steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
-        aws-region: ${{ env.AWS_REGION }}
-        role-session-name: GitHubActions-Staging
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Staging
 
-    - name: Get image tag for staging
-      id: get-staging-tag
-      run: |
-        if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
-          echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
-          echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
-        else
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name $ECR_REPOSITORY \
-            --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
-            --output text 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
-            echo "Using latest ECR image tag: $LATEST_TAG"
-            echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+      - name: Get image tag for staging
+        id: get-staging-tag
+        run: |
+          if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
+            echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
+            echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
           else
-            echo " No image tags found in ECR"
-            exit 1
+            LATEST_TAG=$(aws ecr describe-images \
+              --repository-name $ECR_REPOSITORY \
+              --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
+              echo "Using latest ECR image tag: $LATEST_TAG"
+              echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+            else
+              echo " No image tags found in ECR"
+              exit 1
+            fi
           fi
-        fi
 
-    - name: Deploy to Staging
-      run: |
-        VERSION="${{ steps.get-staging-tag.outputs.image-tag }}"
-        echo "🚀 Deploying version $VERSION to Staging"
-        echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+      - name: Deploy to Staging
+        run: |
+          VERSION="${{ steps.get-staging-tag.outputs.image-tag }}"
+          echo "🚀 Deploying version $VERSION to Staging"
+          echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+          
+          aws ecs update-service \
+            --cluster next-hire-cluster-stg \
+            --service $ECS_SERVICE-staging \
+            --force-new-deployment
+
+      - name: Wait for staging deployment
+        run: |
+          echo " Waiting for Staging deployment..."
+          aws ecs wait services-stable \
+            --cluster next-hire-cluster-stg \
+            --services $ECS_SERVICE-staging
+          echo "Staging deployment completed!"
+
+  # deploy-to-production:
+  #   needs: build-and-push
+  #   if: false
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+
+  #   steps:
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
+  #       aws-region: ${{ env.AWS_REGION }}
+  #       role-session-name: GitHubActions-Production
+
+  #   - name: Get image tag for production
+  #     id: get-production-tag
+  #     run: |
+  #       if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
+  #         echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
+  #         echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
+  #       else
+  #         LATEST_TAG=$(aws ecr describe-images \
+  #           --repository-name $ECR_REPOSITORY \
+  #           --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
+  #           --output text 2>/dev/null || echo "")
+  #         if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
+  #           echo "Using latest ECR image tag: $LATEST_TAG"
+  #           echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+  #         else
+  #           echo " No image tags found in ECR"
+  #           exit 1
+  #         fi
+  #       fi
+
+  #   - name: Deploy to Production
+  #     run: |
+  #       VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
+  #       echo "🚀 Deploying version $VERSION to Production"
+  #       echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
         
-        aws ecs update-service \
-          --cluster next-hire-cluster-stg \
-          --service $ECS_SERVICE-staging \
-          --force-new-deployment
+  #       aws ecs update-service \
+  #         --cluster next-hire-cluster-prd \
+  #         --service $ECS_SERVICE \
+  #         --force-new-deployment
 
-    - name: Wait for staging deployment
-      run: |
-        echo " Waiting for Staging deployment..."
-        aws ecs wait services-stable \
-          --cluster next-hire-cluster-stg \
-          --services $ECS_SERVICE-staging
-        echo "Staging deployment completed!"
+  #   - name: Wait for production deployment
+  #     run: |
+  #       echo " Waiting for Production deployment..."
+  #       aws ecs wait services-stable \
+  #         --cluster next-hire-cluster-prd \
+  #         --services $ECS_SERVICE
+  #       echo "Production deployment completed!"
 
-  deploy-to-production:
-    needs: build-and-push
-    if: false
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_ASSUME_ROLE }}
-        aws-region: ${{ env.AWS_REGION }}
-        role-session-name: GitHubActions-Production
-
-    - name: Get image tag for production
-      id: get-production-tag
-      run: |
-        if [ -n "${{ needs.build-and-push.outputs.image-tag }}" ]; then
-          echo "Using build job image tag: ${{ needs.build-and-push.outputs.image-tag }}"
-          echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
-        else
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name $ECR_REPOSITORY \
-            --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
-            --output text 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
-            echo "Using latest ECR image tag: $LATEST_TAG"
-            echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          else
-            echo " No image tags found in ECR"
-            exit 1
-          fi
-        fi
-
-    - name: Deploy to Production
-      run: |
-        VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-        echo "🚀 Deploying version $VERSION to Production"
-        echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
-        
-        aws ecs update-service \
-          --cluster next-hire-cluster-prd \
-          --service $ECS_SERVICE \
-          --force-new-deployment
-
-    - name: Wait for production deployment
-      run: |
-        echo " Waiting for Production deployment..."
-        aws ecs wait services-stable \
-          --cluster next-hire-cluster-prd \
-          --services $ECS_SERVICE
-        echo "Production deployment completed!"
-
-    - name: Deployment success notification
-      run: |
-        VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-        echo "Version $VERSION successfully deployed to Production!"
+  #   - name: Deployment success notification
+  #     run: |
+  #       VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
+  #       echo "Version $VERSION successfully deployed to Production!"
