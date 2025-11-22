@@ -156,31 +156,33 @@ jobs:
           --services $ECS_SERVICE
         echo "Development deployment completed!"
 
-  # STAGING APPROVAL - Skipped on auto runs, available for manual re-run
+  # STAGING APPROVAL - Only runs when manually triggered via workflow_dispatch or re-run
   wait-for-staging-approval:
     needs: deploy-to-dev
-    if: failure() || cancelled()  # This makes it skippable by default
+    if: always() && needs.deploy-to-dev.result == 'success'
     runs-on: ubuntu-latest
-    # environment: 
-    #   name: staging
-    #   url: https://staging.example.com
 
     steps:
-    - name: Wait for manual approval
-      uses: trstringer/manual-approval@v1
-      with:
-        secret: ${{ github.token }}
-        approvers: ${{ vars.STAGING_APPROVERS }}
-        minimum-approvals: 1
+    - name: Manual gate - Re-run this job to approve staging
+      run: |
+        echo "This is a manual gate for staging deployment"
+        echo "To deploy to staging:"
+        echo "1. Click 'Re-run jobs' at the top"
+        echo "2. Select 'Re-run failed jobs' or 'wait-for-staging-approval'"
+        echo "3. This will trigger the staging approval process"
+        exit 1
 
-  # STAGING DEPLOYMENT - Runs when approval job is manually executed
+  # STAGING DEPLOYMENT - Runs after approval
   deploy-to-staging:
     needs: [build-and-push, wait-for-staging-approval]
-    if: success()
+    if: always() && needs.wait-for-staging-approval.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
+    environment:
+      name: staging
+      url: https://staging.example.com
 
     steps:
     - name: Configure AWS credentials
@@ -207,7 +209,7 @@ jobs:
             echo "Using latest ECR image tag: $LATEST_TAG"
             echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           else
-            echo "No image tags found in ECR"
+            echo " No image tags found in ECR"
             exit 1
           fi
         fi
@@ -215,7 +217,7 @@ jobs:
     - name: Deploy to Staging
       run: |
         VERSION="${{ steps.get-staging-tag.outputs.image-tag }}"
-        echo "🚀 Deploying version $VERSION to Staging"
+        echo "Deploying version $VERSION to Staging"
         echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
         
         aws ecs update-service \
@@ -231,32 +233,33 @@ jobs:
           --services $ECS_SERVICE-staging
         echo "Staging deployment completed!"
 
-  # PRODUCTION APPROVAL - Skipped on auto runs, available for manual re-run
+  # PRODUCTION APPROVAL - Only runs when manually triggered
   wait-for-production-approval:
     needs: deploy-to-dev
-    if: failure() || cancelled()  # This makes it skippable by default
+    if: always() && needs.deploy-to-dev.result == 'success'
     runs-on: ubuntu-latest
-    environment: 
-      name: production
-      url: https://production.example.com
 
     steps:
-    - name: Wait for manual approval
-      uses: trstringer/manual-approval@v1
-      with:
-        secret: ${{ github.token }}
-        approvers: ${{ vars.PRODUCTION_APPROVERS }}
-        minimum-approvals: 1
+    - name: Manual gate - Re-run this job to approve production
+      run: |
+        echo "⏸This is a manual gate for production deployment"
+        echo "To deploy to production:"
+        echo "1. Click 'Re-run jobs' at the top"
+        echo "2. Select 'Re-run failed jobs' or 'wait-for-production-approval'"
+        echo "3. This will trigger the production approval process"
+        exit 1
 
-  # PRODUCTION DEPLOYMENT - Runs when approval job is manually executed
+  # PRODUCTION DEPLOYMENT - Runs after approval
   deploy-to-production:
     needs: [build-and-push, wait-for-production-approval]
-    if: success()
+    if: always() && needs.wait-for-production-approval.result == 'success'
     runs-on: ubuntu-latest
-    environment: production
     permissions:
       id-token: write
       contents: read
+    environment:
+      name: production
+      url: https://production.example.com
 
     steps:
     - name: Configure AWS credentials
@@ -283,7 +286,7 @@ jobs:
             echo "Using latest ECR image tag: $LATEST_TAG"
             echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           else
-            echo " No image tags found in ECR"
+            echo "No image tags found in ECR"
             exit 1
           fi
         fi
@@ -310,4 +313,4 @@ jobs:
     - name: Deployment success notification
       run: |
         VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-        echo "Version $VERSION successfully deployed to Production!"
+        echo " Version $VERSION successfully deployed to Production!"
