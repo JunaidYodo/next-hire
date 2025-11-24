@@ -8,7 +8,6 @@ on:
 env:
   AWS_REGION: us-east-2
   ECR_REPOSITORY: next-hire-app
-  ECS_CLUSTER: next-hire-cluster
   ECS_SERVICE: next-hire-app
   AWS_ACCOUNT_ID: 618166615317
 
@@ -136,6 +135,34 @@ jobs:
         aws-region: ${{ env.AWS_REGION }}
         role-session-name: GitHubActions-Dev
 
+    - name: Update task definition with new image
+      id: update-task-def
+      run: |
+        VERSION="${{ needs.build-and-push.outputs.image-tag }}"
+        NEW_IMAGE="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+        
+        echo "Updating task definition with image: $NEW_IMAGE"
+        
+        # Get current task definition
+        TASK_DEFINITION=$(aws ecs describe-task-definition \
+          --task-definition next-hire-app-dev \
+          --query 'taskDefinition' \
+          --output json)
+        
+        # Update the image in the container definition
+        NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "$NEW_IMAGE" \
+          '.containerDefinitions[0].image = $IMAGE | 
+           del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+        
+        # Register new task definition
+        NEW_TASK_INFO=$(aws ecs register-task-definition \
+          --cli-input-json "$NEW_TASK_DEF" \
+          --query 'taskDefinition.taskDefinitionArn' \
+          --output text)
+        
+        echo "New task definition registered: $NEW_TASK_INFO"
+        echo "task-definition-arn=$NEW_TASK_INFO" >> $GITHUB_OUTPUT
+
     - name: Deploy to Development
       run: |
         VERSION="${{ needs.build-and-push.outputs.image-tag }}"
@@ -143,7 +170,8 @@ jobs:
         
         aws ecs update-service \
           --cluster next-hire-cluster-dev \
-          --service $ECS_SERVICE \
+          --service next-hire-app-dev \
+          --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
           --force-new-deployment
 
     - name: Wait for dev deployment
@@ -151,7 +179,7 @@ jobs:
         echo "Waiting for Development deployment..."
         aws ecs wait services-stable \
           --cluster next-hire-cluster-dev \
-          --services $ECS_SERVICE
+          --services next-hire-app-dev
         echo "Development deployment completed!"
 
   deploy-to-staging:
@@ -179,27 +207,56 @@ jobs:
             echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
           else
             LATEST_TAG=$(aws ecr describe-images \
-              --repository-name $ECR_REPOSITORY \
+              --repository-name ${{ env.ECR_REPOSITORY }} \
               --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
               --output text 2>/dev/null || echo "")
             if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
               echo "Using latest ECR image tag: $LATEST_TAG"
               echo "image-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
             else
-              echo " No image tags found in ECR"
+              echo "No image tags found in ECR"
               exit 1
             fi
           fi
 
+      - name: Update task definition with new image
+        id: update-task-def
+        run: |
+          VERSION="${{ steps.get-staging-tag.outputs.image-tag }}"
+          NEW_IMAGE="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+          
+          echo "Updating task definition with image: $NEW_IMAGE"
+          
+          # Get current task definition
+          TASK_DEFINITION=$(aws ecs describe-task-definition \
+            --task-definition next-hire-app-stg \
+            --query 'taskDefinition' \
+            --output json)
+          
+          # Update the image in the container definition
+          NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "$NEW_IMAGE" \
+            '.containerDefinitions[0].image = $IMAGE | 
+             del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+          
+          # Register new task definition
+          NEW_TASK_INFO=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          
+          echo "New task definition registered: $NEW_TASK_INFO"
+          echo "task-definition-arn=$NEW_TASK_INFO" >> $GITHUB_OUTPUT
+
       - name: Deploy to Staging
         run: |
           VERSION="${{ steps.get-staging-tag.outputs.image-tag }}"
-          echo "🚀 Deploying version $VERSION to Staging"
+          echo "Deploying version $VERSION to Staging"
           echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
           
           aws ecs update-service \
             --cluster next-hire-cluster-stg \
-            --service $ECS_SERVICE-staging \
+            --service ${{ env.ECS_SERVICE }}-stg \
+            --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
             --force-new-deployment
 
       - name: Wait for staging deployment
@@ -207,7 +264,7 @@ jobs:
           echo " Waiting for Staging deployment..."
           aws ecs wait services-stable \
             --cluster next-hire-cluster-stg \
-            --services $ECS_SERVICE-staging
+            --services ${{ env.ECS_SERVICE }}-stg
           echo "Staging deployment completed!"
 
   # deploy-to-production:
@@ -235,7 +292,7 @@ jobs:
   #         echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
   #       else
   #         LATEST_TAG=$(aws ecr describe-images \
-  #           --repository-name $ECR_REPOSITORY \
+  #           --repository-name ${{ env.ECR_REPOSITORY }} \
   #           --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
   #           --output text 2>/dev/null || echo "")
   #         if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "None" ] && [ "$LATEST_TAG" != "latest" ]; then
@@ -247,23 +304,52 @@ jobs:
   #         fi
   #       fi
 
+  #   - name: Update task definition with new image
+  #     id: update-task-def
+  #     run: |
+  #       VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
+  #       NEW_IMAGE="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
+  #       
+  #       echo "Updating task definition with image: $NEW_IMAGE"
+  #       
+  #       # Get current task definition
+  #       TASK_DEFINITION=$(aws ecs describe-task-definition \
+  #         --task-definition next-hire-app-prd \
+  #         --query 'taskDefinition' \
+  #         --output json)
+  #       
+  #       # Update the image in the container definition
+  #       NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "$NEW_IMAGE" \
+  #         '.containerDefinitions[0].image = $IMAGE | 
+  #          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+  #       
+  #       # Register new task definition
+  #       NEW_TASK_INFO=$(aws ecs register-task-definition \
+  #         --cli-input-json "$NEW_TASK_DEF" \
+  #         --query 'taskDefinition.taskDefinitionArn' \
+  #         --output text)
+  #       
+  #       echo "New task definition registered: $NEW_TASK_INFO"
+  #       echo "task-definition-arn=$NEW_TASK_INFO" >> $GITHUB_OUTPUT
+
   #   - name: Deploy to Production
   #     run: |
   #       VERSION="${{ steps.get-production-tag.outputs.image-tag }}"
-  #       echo "🚀 Deploying version $VERSION to Production"
+  #       echo "Deploying version $VERSION to Production"
   #       echo "Image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:$VERSION"
-        
+  #       
   #       aws ecs update-service \
   #         --cluster next-hire-cluster-prd \
-  #         --service $ECS_SERVICE \
+  #         --service ${{ env.ECS_SERVICE }} \
+  #         --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
   #         --force-new-deployment
 
   #   - name: Wait for production deployment
   #     run: |
-  #       echo " Waiting for Production deployment..."
+  #       echo "Waiting for Production deployment..."
   #       aws ecs wait services-stable \
   #         --cluster next-hire-cluster-prd \
-  #         --services $ECS_SERVICE
+  #         --services ${{ env.ECS_SERVICE }}
   #       echo "Production deployment completed!"
 
   #   - name: Deployment success notification
