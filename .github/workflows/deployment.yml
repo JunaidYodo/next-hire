@@ -8,8 +8,6 @@ on:
 env:
   AWS_REGION: us-east-2
   ECR_REPOSITORY: next-hire-app
-  ECS_CLUSTER: next-hire-cluster
-  ECS_SERVICE: next-hire-app
   AWS_ACCOUNT_ID: 618166615317
 
 jobs:
@@ -186,7 +184,7 @@ jobs:
         
         aws ecs update-service \
           --cluster next-hire-cluster-dev \
-          --service ${{ env.ECS_SERVICE }} \
+          --service next-hire-app-dev \
           --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
           --force-new-deployment
 
@@ -195,7 +193,7 @@ jobs:
         echo "Waiting for Development deployment..."
         aws ecs wait services-stable \
           --cluster next-hire-cluster-dev \
-          --services ${{ env.ECS_SERVICE }}
+          --services next-hire-app-dev
         echo "Development deployment completed!"
 
   deploy-to-staging:
@@ -271,7 +269,7 @@ jobs:
           
           aws ecs update-service \
             --cluster next-hire-cluster-stg \
-            --service ${{ env.ECS_SERVICE }}-staging \
+            --service next-hire-app-stg \
             --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
             --force-new-deployment
 
@@ -280,7 +278,7 @@ jobs:
           echo "Waiting for Staging deployment..."
           aws ecs wait services-stable \
             --cluster next-hire-cluster-stg \
-            --services ${{ env.ECS_SERVICE }}-staging
+            --services next-hire-app-stg
           echo " Staging deployment completed!"
 
   # deploy-to-production:
@@ -356,7 +354,7 @@ jobs:
   #       
   #       aws ecs update-service \
   #         --cluster next-hire-cluster-prd \
-  #         --service ${{ env.ECS_SERVICE }} \
+  #         --service next-hire-app-prd \
   #         --task-definition ${{ steps.update-task-def.outputs.task-definition-arn }} \
   #         --force-new-deployment
 
@@ -365,7 +363,7 @@ jobs:
   #       echo "Waiting for Production deployment..."
   #       aws ecs wait services-stable \
   #         --cluster next-hire-cluster-prd \
-  #         --services ${{ env.ECS_SERVICE }}
+  #         --services next-hire-app-prd
   #       echo "Production deployment completed!"
 
   #   - name: Deployment success notification
