@@ -23,7 +23,7 @@ import os
 #     return JsonResponse({"status": "healthy", "message": "Service is running"})
 
 def health_check(request):
-    if os.getenv('FORCE_HEALTH_FAIL', 'false').lower() == 'true':
+    if os.getenv('FORCE_HEALTH_FAIL', 'true').lower() == 'true':
         return JsonResponse({
             'status': 'unhealthy',
             'message': 'Forced failure for testing'
