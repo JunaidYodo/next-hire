@@ -17,9 +17,22 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.http import JsonResponse
+import os
+
+# def health_check(request):
+#     return JsonResponse({"status": "healthy", "message": "Service is running"})
 
 def health_check(request):
-    return JsonResponse({"status": "healthy", "message": "Service is running"})
+    if os.getenv('FORCE_HEALTH_FAIL', 'false').lower() == 'true':
+        return JsonResponse({
+            'status': 'unhealthy',
+            'message': 'Forced failure for testing'
+        }, status=503)
+    
+    return JsonResponse({
+        'status': 'healthy',
+        'version': os.getenv('BUILD_VERSION', 'unknown')
+    }, status=200)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
